@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Save the Sailboats – Free Online Typing Game</title>
+<meta name="description" content="Save the Sailboats is a free typing game. Type the word on each sailboat to turn it back to harbor before it hits the rocks.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#10343f;--deep:#0a2a33;--coral:#ff6b4a;--sun:#ffd166;--foam:#f4fbfb}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--deep);overflow:hidden;font-family:'Fredoka','Trebuchet MS',sans-serif}
+#wrap{position:absolute;left:0;top:0;width:960px;height:540px;transform-origin:0 0;overflow:hidden;background:#2aa6b0}
+canvas{position:absolute;inset:0;width:960px;height:540px;display:block}
+.panel{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--foam)}
+.panel[hidden]{display:none}
+.panel.dim{background:rgba(10,42,51,.55)}
+.card{background:rgba(10,42,51,.82);border-radius:28px;padding:34px 48px 28px;max-width:640px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+h1{margin:0 0 10px;font-size:62px;line-height:1.05;font-weight:700;letter-spacing:.5px;text-shadow:0 3px 0 rgba(0,0,0,.25)}
+h2{margin:0 0 8px;font-size:44px;font-weight:700}
+.card p{margin:0 auto 22px;font-size:20px;line-height:1.4;max-width:470px;color:#d6ecee}
+.btn{font:700 32px 'Fredoka','Trebuchet MS',sans-serif;color:#fff;background:var(--coral);border:0;border-radius:999px;padding:12px 56px;cursor:pointer;box-shadow:0 6px 0 #c4472b;transition:transform .08s,box-shadow .08s}
+.btn:hover{transform:translateY(2px);box-shadow:0 4px 0 #c4472b}
+.btn:active{transform:translateY(6px);box-shadow:0 0 0 #c4472b}
+.btn:focus-visible,.site:focus-visible,#mute:focus-visible{outline:3px solid var(--sun);outline-offset:3px}
+.site{display:block;margin-top:22px;color:var(--sun);font-size:18px;font-weight:500;text-decoration:none}
+.site:hover{text-decoration:underline}
+.stats{font-size:22px;margin:0 0 22px;line-height:1.6}
+.stats b{color:var(--sun)}
+#mute{position:absolute;left:14px;bottom:12px;font:500 15px 'Fredoka',sans-serif;color:var(--foam);background:rgba(10,42,51,.6);border:0;border-radius:999px;padding:6px 14px;cursor:pointer}
+@media (prefers-reduced-motion:reduce){.btn{transition:none}}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="1920" height="1080" aria-label="Save the Sailboats game"></canvas>
+
+  <div id="menu" class="panel">
+    <div class="card">
+      <h1>Save the Sailboats</h1>
+      <p>Type the word on each sailboat to turn it back to harbor before it hits the rocks.</p>
+      <button id="play" class="btn">Play</button>
+      <!-- Change this link to your own website -->
+      <a class="site" href="https://typinggamesfree.io/" target="_blank" rel="noopener">More free typing games at typinggamesfree.io</a>
+    </div>
+  </div>
+
+  <div id="pause" class="panel dim" hidden>
+    <div class="card">
+      <h2>Paused</h2>
+      <p>Rest your fingers on the home row.</p>
+      <button id="resume" class="btn">Resume</button>
+    </div>
+  </div>
+
+  <div id="over" class="panel dim" hidden>
+    <div class="card">
+      <h2>The reef wins this time</h2>
+      <div class="stats">Score <b id="oScore">0</b> · Boats saved <b id="oSaved">0</b><br>Best score <b id="oBest">0</b></div>
+      <button id="again" class="btn">Play again</button>
+      <a class="site" href="https://typinggamesfree.io/" target="_blank" rel="noopener">More free typing games at typinggamesfree.io</a>
+    </div>
+  </div>
+
+  <button id="mute" aria-pressed="false">Sound: on</button>
+</div>
+
+<script>
+(() => {
+const W = 960, H = 540, HORIZON = 170, REEF = 872;
+const FONT = "'Fredoka','Trebuchet MS',sans-serif";
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d'), wrap = $('wrap');
+ctx.scale(2, 2);
+
+/* ---------- fit 960x540 stage to any window ---------- */
+function fit() {
+  const s = Math.min(innerWidth / W, innerHeight / H);
+  wrap.style.transform = `translate(${(innerWidth - W * s) / 2}px,${(innerHeight - H * s) / 2}px) scale(${s})`;
+}
+addEventListener('resize', fit); fit();
+
+/* ---------- words by level ---------- */
+const TIERS = [
+  'planet garden bridge castle pencil rocket window forest silver basket market dragon harbor sunset'.split(' '),
+  'history science journey explore mystery captain library weather machine kitchen problem balance'.split(' '),
+  'adventure beautiful treasure mountain festival discover triangle language computer elephant calendar'.split(' '),
+  'community important electricity different experiment celebrate telescope knowledge champion direction'.split(' '),
+  'imagination temperature environment especially government independent geography civilization'.split(' '),
+  'extraordinary international archaeology determination communication transportation'.split(' ')
+];
+const COLORS = ['#ff6b4a', '#ffd166', '#ef476f', '#8ecae6', '#95d5b2', '#f78c6b'];
+const LANES = [230, 296, 362, 428, 494];
+
+/* ---------- state ---------- */
+let state = 'menu', boats = [], floats = [], target = null;
+let score = 0, lives = 5, level = 1, saved = 0, combo = 0, spawnT = 0;
+let clock = 0, shake = 0, banner = 0, muted = false, best = 0;
+try { best = +localStorage.getItem('ssb-best') || 0; } catch (e) {}
+
+/* ---------- sound ---------- */
+let ac;
+function tone(f, d, type = 'sine', v = .07, when = 0) {
+  if (muted || !ac) return;
+  const t = ac.currentTime + when, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = f;
+  g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(.001, t + d);
+  o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + d);
+}
+$('mute').onclick = toggleMute;
+function toggleMute() {
+  muted = !muted; $('mute').textContent = 'Sound: ' + (muted ? 'off' : 'on');
+  $('mute').setAttribute('aria-pressed', muted); $('mute').blur();
+}
+
+/* ---------- game flow ---------- */
+function show(id, on) { $(id).hidden = !on; }
+function start() {
+  if (state === 'play') return;
+  if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  if (ac && ac.state === 'suspended') ac.resume();
+  boats = []; floats = []; target = null;
+  score = 0; lives = 5; level = 1; saved = 0; combo = 0; spawnT = .6; banner = 1.6;
+  state = 'play';
+  show('menu', false); show('over', false); show('pause', false);
+  document.activeElement && document.activeElement.blur();
+}
+function pause() { if (state !== 'play') return; state = 'pause'; show('pause', true); $('resume').focus(); }
+function resume() { if (state !== 'pause') return; state = 'play'; show('pause', false); $('resume').blur(); }
+function gameOver() {
+  state = 'over';
+  if (score > best) { best = score; try { localStorage.setItem('ssb-best', best); } catch (e) {} }
+  $('oScore').textContent = score; $('oSaved').textContent = saved; $('oBest').textContent = best;
+  setTimeout(() => { if (state === 'over') { show('over', true); $('again').focus(); } }, 900);
+}
+$('play').onclick = start; $('again').onclick = start; $('resume').onclick = resume;
+
+/* ---------- boats ---------- */
+function pickWord() {
+  const list = TIERS[Math.min(level - 1, TIERS.length - 1)];
+  const used = boats.filter(b => b.st === 'sail').map(b => b.word[0]);
+  for (let i = 0; i < 30; i++) {
+    const w = list[Math.random() * list.length | 0];
+    if (!used.includes(w[0])) return w;
+  }
+  return null;
+}
+function spawn() {
+  const free = LANES.filter(y => !boats.some(b => b.st === 'sail' && b.y === y && b.x < 190));
+  const word = pickWord();
+  if (!free.length || !word) return false;
+  boats.push({
+    x: -50, y: free[Math.random() * free.length | 0], word, typed: 0, st: 'sail',
+    v: 24 + level * 4 + Math.random() * 5, col: COLORS[Math.random() * COLORS.length | 0],
+    ph: Math.random() * 6, a: 1, tilt: 0, flip: 1
+  });
+  return true;
+}
+function press(k) {
+  if (!/^[a-z]$/.test(k)) return;
+  if (!target) {
+    const c = boats.filter(b => b.st === 'sail' && b.word[0] === k);
+    if (c.length) target = c.reduce((m, b) => b.x > m.x ? b : m);
+  }
+  if (!target) { tone(190, .1, 'square', .05); combo = 0; return; }
+  if (target.word[target.typed] === k) {
+    target.typed++; tone(640 + target.typed * 40, .07, 'triangle');
+    if (target.typed === target.word.length) rescue(target);
+  } else { tone(170, .12, 'square', .05); combo = 0; }
+}
+function rescue(b) {
+  b.st = 'saved'; b.flip = -1; target = null; combo++; saved++;
+  const pts = b.word.length * 10 + Math.min(combo, 20) * 2;
+  score += pts;
+  floats.push({ x: b.x, y: b.y - 70, t: '+' + pts, a: 1 });
+  [523, 659, 784].forEach((f, i) => tone(f, .14, 'triangle', .07, i * .07));
+  if (saved % 8 === 0) {
+    level++; banner = 2;
+    if (lives < 5) lives++;
+    [784, 988, 1175].forEach((f, i) => tone(f, .2, 'sine', .07, .25 + i * .1));
+  }
+}
+function wreck(b) {
+  b.st = 'wreck'; b.a = 1; lives--; combo = 0; shake = .45;
+  if (target === b) target = null;
+  tone(130, .45, 'sawtooth', .09); tone(90, .5, 'square', .06, .05);
+  if (lives <= 0 && state === 'play') gameOver();
+}
+
+/* ---------- update ---------- */
+function update(dt) {
+  if (state === 'play') {
+    spawnT -= dt;
+    if (spawnT <= 0) spawnT = spawn() ? Math.max(1.6, 4.2 - level * .25) : .3;
+  }
+  for (const b of boats) {
+    if (b.st === 'sail') { b.x += b.v * dt; if (b.x > REEF && state === 'play') wreck(b); }
+    else if (b.st === 'saved') { b.x -= 170 * dt; b.y -= 6 * dt; b.a = Math.max(0, Math.min(1, b.x / 120)); }
+    else { b.y += 45 * dt; b.tilt += 1.1 * dt; b.a -= .7 * dt; }
+  }
+  boats = boats.filter(b => b.a > 0 && b.x > -70);
+  for (const f of floats) { f.y -= 40 * dt; f.a -= .9 * dt; }
+  floats = floats.filter(f => f.a > 0);
+  shake = Math.max(0, shake - dt); banner = Math.max(0, banner - dt);
+}
+
+/* ---------- drawing ---------- */
+function drawBoat(x, y, col, flip, tilt, al) {
+  ctx.save(); ctx.globalAlpha = al; ctx.translate(x, y); ctx.rotate(tilt); ctx.scale(flip, 1);
+  ctx.fillStyle = 'rgba(255,255,255,.55)';
+  ctx.beginPath(); ctx.ellipse(-4, 14, 40, 4, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#6b3f2a';
+  ctx.beginPath(); ctx.moveTo(-30, 0); ctx.lineTo(30, 0); ctx.quadraticCurveTo(26, 14, 14, 14);
+  ctx.lineTo(-16, 14); ctx.quadraticCurveTo(-26, 12, -30, 0); ctx.fill();
+  ctx.fillStyle = '#f4fbfb'; ctx.fillRect(-27, 3, 54, 3);
+  ctx.strokeStyle = '#4a2c1d'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -50); ctx.stroke();
+  ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(3, -46); ctx.lineTo(3, -6); ctx.lineTo(27, -6); ctx.fill();
+  ctx.fillStyle = '#f4fbfb'; ctx.beginPath(); ctx.moveTo(-3, -42); ctx.lineTo(-3, -6); ctx.lineTo(-22, -6); ctx.fill();
+  ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.moveTo(0, -50); ctx.lineTo(13, -46); ctx.lineTo(0, -42); ctx.fill();
+  ctx.restore();
+}
+function drawScene() {
+  // sky
+  let g = ctx.createLinearGradient(0, 0, 0, HORIZON);
+  g.addColorStop(0, '#ff9f7a'); g.addColorStop(.6, '#ffd1a1'); g.addColorStop(1, '#fff0cf');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, HORIZON + 2);
+  // sun
+  g = ctx.createRadialGradient(690, 150, 10, 690, 150, 120);
+  g.addColorStop(0, 'rgba(255,244,190,.95)'); g.addColorStop(.4, 'rgba(255,230,160,.5)'); g.addColorStop(1, 'rgba(255,230,160,0)');
+  ctx.fillStyle = g; ctx.fillRect(560, 20, 260, 160);
+  ctx.fillStyle = '#fff3c4'; ctx.beginPath(); ctx.arc(690, 150, 38, 0, 7); ctx.fill();
+  // clouds
+  ctx.fillStyle = 'rgba(255,255,255,.75)';
+  for (let i = 0; i < 4; i++) {
+    const cx = ((clock * (6 + i * 2) + i * 290) % 1160) - 100, cy = 40 + i * 28;
+    ctx.beginPath(); ctx.ellipse(cx, cy, 54, 13, 0, 0, 7); ctx.ellipse(cx + 26, cy - 9, 30, 12, 0, 0, 7); ctx.fill();
+  }
+  // far islands
+  ctx.fillStyle = '#6fb0aa';
+  ctx.beginPath(); ctx.moveTo(60, HORIZON + 1); ctx.quadraticCurveTo(140, HORIZON - 40, 260, HORIZON + 1); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(380, HORIZON + 1); ctx.quadraticCurveTo(450, HORIZON - 24, 540, HORIZON + 1); ctx.fill();
+  // sea
+  g = ctx.createLinearGradient(0, HORIZON, 0, H);
+  g.addColorStop(0, '#3bb5ba'); g.addColorStop(1, '#0b4f63');
+  ctx.fillStyle = g; ctx.fillRect(0, HORIZON, W, H - HORIZON);
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 10; i++) {
+    const y0 = HORIZON + 18 + i * 37;
+    ctx.strokeStyle = `rgba(255,255,255,${.1 + i * .012})`;
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += 16) {
+      const y = y0 + Math.sin(x * .02 + clock * (.8 + i * .08) + i * 1.7) * (2 + i * .5);
+      x ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // reef
+  ctx.fillStyle = '#2b2f3a'; ctx.strokeStyle = '#4b5263'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(W, HORIZON);
+  for (let y = HORIZON, n = 0; y <= H + 22; y += 22, n++) ctx.lineTo(REEF + 10 + (n % 2 ? 18 : 0) + Math.sin(y) * 6, y);
+  ctx.lineTo(W, H); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  for (let y = HORIZON + 10; y < H; y += 26) {
+    ctx.beginPath(); ctx.arc(REEF + 4 + Math.sin(clock * 3 + y) * 6, y, 6 + Math.sin(clock * 2 + y) * 2, 0, 7); ctx.fill();
+  }
+  // lighthouse
+  const lx = 925, ly = HORIZON + 14;
+  ctx.fillStyle = '#f4fbfb'; ctx.beginPath(); ctx.moveTo(lx - 13, ly); ctx.lineTo(lx + 13, ly); ctx.lineTo(lx + 8, ly - 80); ctx.lineTo(lx - 8, ly - 80); ctx.fill();
+  ctx.fillStyle = '#e63946';
+  for (const o of [0, 40]) { ctx.beginPath(); ctx.moveTo(lx - 12 + o * .08, ly - 14 - o); ctx.lineTo(lx + 12 - o * .08, ly - 14 - o); ctx.lineTo(lx + 10.5 - o * .08, ly - 34 - o); ctx.lineTo(lx - 10.5 + o * .08, ly - 34 - o); ctx.fill(); }
+  ctx.fillStyle = '#333'; ctx.fillRect(lx - 10, ly - 90, 20, 10);
+  const glow = .5 + .5 * Math.sin(clock * 3);
+  ctx.fillStyle = `rgba(255,230,120,${.6 + glow * .4})`; ctx.fillRect(lx - 6, ly - 100, 12, 10);
+  ctx.fillStyle = '#e63946'; ctx.beginPath(); ctx.moveTo(lx - 10, ly - 100); ctx.lineTo(lx, ly - 112); ctx.lineTo(lx + 10, ly - 100); ctx.fill();
+}
+function bobY(b) { return b.y + Math.sin(clock * 2 + b.ph) * 3; }
+function drawLabel(b) {
+  const x = b.x, y = bobY(b) - 62;
+  ctx.font = `700 22px ${FONT}`; ctx.textBaseline = 'middle';
+  const t = b.word.slice(0, b.typed), r = b.word.slice(b.typed);
+  const wt = ctx.measureText(t).width, wr = ctx.measureText(r).width, w = wt + wr + 22;
+  ctx.fillStyle = 'rgba(10,42,51,.88)';
+  ctx.beginPath(); ctx.roundRect(x - w / 2, y - 16, w, 32, 16); ctx.fill();
+  if (b === target) { ctx.strokeStyle = '#ff6b4a'; ctx.lineWidth = 3; ctx.stroke(); }
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffd166'; ctx.fillText(t, x - w / 2 + 11, y + 1);
+  ctx.fillStyle = '#f4fbfb'; ctx.fillText(r, x - w / 2 + 11 + wt, y + 1);
+}
+function drawHUD() {
+  ctx.textBaseline = 'middle'; ctx.font = `600 22px ${FONT}`;
+  ctx.fillStyle = 'rgba(10,42,51,.62)';
+  ctx.beginPath(); ctx.roundRect(14, 12, 190, 38, 19); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(W - 214, 12, 200, 38, 19); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(W / 2 - 62, 12, 124, 38, 19); ctx.fill();
+  ctx.fillStyle = '#f4fbfb'; ctx.textAlign = 'left'; ctx.fillText('Score ' + score, 30, 32);
+  ctx.textAlign = 'center'; ctx.fillText('Level ' + level, W / 2, 32);
+  ctx.textAlign = 'right';
+  let hearts = ''; for (let i = 0; i < 5; i++) hearts += i < lives ? '♥' : '♡';
+  ctx.fillStyle = '#ff6b4a'; ctx.fillText(hearts, W - 28, 32);
+  if (combo >= 3) { ctx.textAlign = 'left'; ctx.fillStyle = '#ffd166'; ctx.fillText('Streak ' + combo, 30, 70); }
+  ctx.textAlign = 'center'; ctx.font = `500 16px ${FONT}`; ctx.fillStyle = 'rgba(255,255,255,.85)';
+  ctx.fillText('Type the word on a sailboat · Esc pauses', W / 2, H - 16);
+}
+function draw() {
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - .5) * shake * 18, (Math.random() - .5) * shake * 18);
+  drawScene();
+  if (state === 'menu') {
+    for (let i = 0; i < 4; i++) {
+      const x = ((clock * 34 + i * 270) % 1120) - 80, y = LANES[(i * 2) % 5];
+      drawBoat(x, y + Math.sin(clock * 2 + i) * 3, COLORS[i], 1, Math.sin(clock * 1.6 + i) * .05, 1);
+    }
+  } else {
+    [...boats].sort((a, b) => a.y - b.y).forEach(b => {
+      const tilt = b.st === 'wreck' ? b.tilt : Math.sin(clock * 1.6 + b.ph) * .05;
+      drawBoat(b.x, bobY(b), b.col, b.flip, tilt, Math.max(0, Math.min(1, b.a)));
+    });
+    boats.forEach(b => b.st === 'sail' && drawLabel(b));
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `700 24px ${FONT}`;
+    floats.forEach(f => { ctx.globalAlpha = Math.max(0, f.a); ctx.fillStyle = '#ffd166'; ctx.fillText(f.t, f.x, f.y); });
+    ctx.globalAlpha = 1;
+    if (banner > 0) {
+      ctx.globalAlpha = Math.min(1, banner); ctx.font = `700 64px ${FONT}`; ctx.fillStyle = '#f4fbfb';
+      ctx.strokeStyle = 'rgba(10,42,51,.6)'; ctx.lineWidth = 8; ctx.lineJoin = 'round';
+      ctx.strokeText('Level ' + level, W / 2, 120); ctx.fillText('Level ' + level, W / 2, 120);
+      ctx.globalAlpha = 1;
+    }
+    drawHUD();
+  }
+  ctx.restore();
+}
+
+/* ---------- input ---------- */
+addEventListener('keydown', e => {
+  if (e.key === 'Escape') { state === 'play' ? pause() : resume(); return; }
+  if (e.key === 'Enter' && state === 'menu') { e.preventDefault(); start(); return; }
+  if (e.key.toLowerCase() === 'm' && state !== 'play') { toggleMute(); return; }
+  if (state !== 'play' || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key.length === 1) { e.preventDefault(); press(e.key.toLowerCase()); }
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+addEventListener('blur', pause);
+
+/* ---------- loop ---------- */
+let last = 0;
+function loop(ts) {
+  const dt = Math.min(.05, (ts - last) / 1000 || 0); last = ts;
+  if (state !== 'pause') { clock += dt; if (state === 'play' || state === 'over') update(dt); }
+  draw(); requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+$('play').focus();
+})();
+</script>
+</body>
+</html>
